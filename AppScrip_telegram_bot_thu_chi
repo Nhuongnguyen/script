@@ -1,0 +1,134 @@
+// Constants
+
+const TOKEN = `Telegram API Key`;
+const BASE_URL = `https://api.telegram.org/bot${TOKEN}`;
+const CHAT_ID = 'ChatID';
+const DEPLOYED_URL = 'Script Deploy URL';
+const SUM_CELL_CHI = 'E2';
+const SUM_CELL_THU = 'F2'
+const CON_LAI = 'G2'
+const METHODS = {
+  SEND_MESSAGE: 'sendMessage',
+  SET_WEBHOOK: 'setWebhook',
+  GET_UPDATES: 'getUpdates',
+}
+
+// Utils
+
+const toQueryParamsString = (obj) => {
+  return Object.keys(obj)
+    .map(key => `${encodeURIComponent(key)}=${encodeURIComponent(obj[key])}`)
+    .join('&');
+}
+
+// Telegram APIs
+
+const makeRequest = async (method, queryParams = {}) => {
+  const url = `${BASE_URL}/${method}?${toQueryParamsString(queryParams)}`
+  const response = await UrlFetchApp.fetch(url);
+  return response.getContentText();
+}
+
+const sendMessage = (text) => {
+  makeRequest(METHODS.SEND_MESSAGE, {
+    chat_id: CHAT_ID,
+    text
+  })
+}
+
+const setWebhook = () => {
+  makeRequest(METHODS.SET_WEBHOOK, {
+    url: DEPLOYED_URL
+  })
+}
+
+const getChatId = async () => {
+  const res = await makeRequest(METHODS.GET_UPDATES);
+  console.log("ChatId: ", JSON.parse(res)?.result[0]?.message?.chat?.id)
+}
+
+// Google Sheet
+
+const addNewRow = (content = []) => {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  const Avals = sheet.getRange("A1:A").getValues();
+  const Alast = Avals.filter(String).length;
+  const columnNumber = content.length;
+  const newRow = sheet.getRange(Alast + 1, 1, 1, columnNumber);
+  newRow.setValues([content]);
+}
+
+const sumIfsDailyExpenses = () => {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  const expensesRange = sheet.getRange('A:C'); // Giả sử ngày nằm ở cột A và số tiền chi nằm ở cột C
+  const today = new Date();
+  const startDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0);
+  const endDate = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1, 0, 0, 0);
+  const sum = expensesRange.getValues().reduce((acc, val) => {
+    const expenseDate = new Date(val[0]);
+    if (expenseDate >= startDate && expenseDate < endDate) {
+      acc += Number(val[2]); // Lấy số tiền chi từ cột 3 (index 2 trong mảng giá trị)
+    }
+    return acc;
+  }, 0);
+  return sum;
+}
+
+// Extract label & price
+
+const getMultiplyBase = (unitLabel) => {
+  switch (unitLabel) {
+    case 'k':
+    case 'K':
+    case 'nghìn':
+    case 'ng':
+    case 'ngàn':
+      return 1000;
+    case 'lít':
+    case 'lit':
+    case 'l':
+      return 100000;
+    case 'củ':
+    case 'tr':
+    case 'm':
+    case 'M':
+      return 1000000;
+    default:
+      return 1;
+  }
+};
+
+const addExpense = (text, type) => {
+  const regex = /(.*)\s(\d*)(\w*)/g;
+  const label = text.replace(regex, '$1').slice(4)
+  const priceText = text.replace(regex, '$2');
+  const unitLabel = text.replace(regex, '$3');
+  const time = new Date().toLocaleString();
+  const price = Number(priceText) * getMultiplyBase(unitLabel);
+
+  if (type === 'Chi') {
+    addNewRow([time, label, price]);
+  }
+  else {
+    addNewRow([time, label, , price]);
+  }
+}
+
+// Webhooks
+
+const doPost = (request) => {
+  const contents = JSON.parse(request.postData.contents);
+  const text = contents.message.text;
+  const type = text.split(' ')
+  // sendMessage(type[0])
+  const types = ['Thu', 'Chi']
+  if (types.indexOf(type[0]) < 0) return sendMessage('Lỗi cú pháp, viết hoa chữ cái đầu cú pháp đúng: "Chi" hoặc "Thu" + tên khoản chi/thu + số tiền')
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  addExpense(text, type[0]);
+  const totalExpenses = sheet.getRange(SUM_CELL_CHI).getValue().toLocaleString('vi-VN', { style: 'currency', currency: 'VND' });
+  const totalIncome = sheet.getRange(SUM_CELL_THU).getValue().toLocaleString('vi-VN', { style: 'currency', currency: 'VND' });
+  const conLai = sheet.getRange(CON_LAI).getValue().toLocaleString('vi-VN', { style: 'currency', currency: 'VND' });
+  const dailyExpenses = sumIfsDailyExpenses().toLocaleString('vi-VN', { style: 'currency', currency: 'VND' }); // Call the sumIfsDailyExpenses function here
+  sendMessage(`Tổng chi: ${totalExpenses}\nTổng thu: ${totalIncome}\nCòn lại: ${conLai}\nTổng chi trong ngày: ${dailyExpenses}`);
+}
